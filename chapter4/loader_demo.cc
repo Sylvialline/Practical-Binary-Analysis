@@ -16,7 +16,7 @@ main(int argc, char *argv[])
   std::string fname;
 
   if(argc < 2) {
-    printf("Usage: %s <binary>\n", argv[0]);
+    printf("Usage: %s <binary> <section-name>...\n", argv[0]);
     return 1;
   }
 
@@ -44,6 +44,60 @@ main(int argc, char *argv[])
       printf("  %-40s 0x%016jx %s\n", 
              sym->name.c_str(), sym->addr, 
              (sym->type & Symbol::SYM_TYPE_FUNC) ? "FUNC" : "");
+    }
+  }
+
+  if(argc >= 3) {
+    const char *name, *type;
+    for(i = 0; 2 + i < argc; i++) {
+      name = argv[2 + i];
+      printf("Section %s:\n", name);
+      std::string sname(name);
+      if(sname == ".shstrtab" || sname == ".symtab" || sname == ".strtab"){
+        // bfd cannot read section `.shstrtab`, `.symtab` and `.strtab` directly even if they exsit.
+        printf("  loader_demo cannot read section %s directly even if it exsits.\n", name);
+        if(sname == ".shstrtab") printf("  You already have these section names.\n");
+        else printf("  Go for 'scanned symbol tables'.\n");
+        continue;
+      }
+
+      bool ok = false;
+      for(auto &section: bin.sections) {
+        if(section.name == sname) {
+          ok = true;
+          switch(section.type) {
+          case Section::SectionType::SEC_TYPE_CODE:
+            type = "CODE"; break;
+          case Section::SectionType::SEC_TYPE_DATA:
+            type = "DATA"; break;
+          default:
+            type = "NONE";
+          }
+          printf("  name: %s\n", name);
+          printf("  type: %s\n", type);
+          printf("  vma: %016jx\n", section.vma);
+          printf("  size: %ju bytes\n", section.size);
+          printf("  contents:");
+          for(uint64_t off=0; off < section.size; off += 0x10) {
+            printf("\n    0x%08jx:", off);
+            for(int x = 0, y = 0; x < 4; x++){
+              printf(" ");
+              for(; y < (x+1) * 4; y++){
+                if(off + y >= section.size) break;
+                printf("%02x", section.bytes[off + y]);
+              }
+              if(off + y >= section.size) break;
+            }
+          }
+          printf("\n");
+          break;
+        }
+      }
+      if(ok == false) {
+
+        printf("  No such section!\n");
+      }
+      printf("\n");
     }
   }
 
