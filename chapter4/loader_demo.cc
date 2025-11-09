@@ -43,7 +43,7 @@ main(int argc, char *argv[])
       sym = &bin.symbols[i];
       printf("  %-40s 0x%016jx %s\n", 
              sym->name.c_str(), sym->addr, 
-             (sym->type & Symbol::SYM_TYPE_FUNC) ? "FUNC" : "");
+             (sym->type & Symbol::SYM_TYPE_FUNC) ? "FUNC" : "OBJECT");
     }
   }
 

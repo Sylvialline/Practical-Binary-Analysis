@@ -80,10 +80,13 @@ load_symbols_bfd(bfd *bfd_h, Binary *bin)
       goto fail;
     }
     for(i = 0; i < nsyms; i++) {
-      if(bfd_symtab[i]->flags & BSF_FUNCTION) {
+      if(bfd_symtab[i]->flags & (BSF_FUNCTION | BSF_OBJECT)) {
         bin->symbols.push_back(Symbol());
         sym = &bin->symbols.back();
-        sym->type = Symbol::SYM_TYPE_FUNC;
+        if(bfd_symtab[i]->flags & BSF_FUNCTION)
+          sym->type = Symbol::SYM_TYPE_FUNC;
+        else
+          sym->type = Symbol::SYM_TYPE_OBJECT;
         sym->name = std::string(bfd_symtab[i]->name);
         sym->addr = bfd_asymbol_value(bfd_symtab[i]);
       }
@@ -165,6 +168,7 @@ load_sections_bfd(bfd *bfd_h, Binary *bin)
   Section::SectionType sectype;
 
   for(bfd_sec = bfd_h->sections; bfd_sec; bfd_sec = bfd_sec->next) {
+    // printf("!%s\n",bfd_section_name(bfd_h, bfd_sec));
     bfd_flags = bfd_get_section_flags(bfd_h, bfd_sec);
 
     sectype = Section::SEC_TYPE_NONE;

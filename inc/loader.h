@@ -13,7 +13,8 @@ class Symbol {
 public:
   enum SymbolType {
     SYM_TYPE_UKN  = 0,
-    SYM_TYPE_FUNC = 1
+    SYM_TYPE_FUNC = 1,
+    SYM_TYPE_OBJECT = 2,
   };
 
   Symbol() : type(SYM_TYPE_UKN), name(), addr(0) {}
