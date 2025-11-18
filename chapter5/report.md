@@ -530,3 +530,58 @@ Run oracle with -h to show a hint
 换句话说，我们或许可以得到这样的结论：实际上 ELF 提供的信息有相当一部分是冗余的，很多时候一些参数可以被唯一确定。因此，存在很多无关紧要的地方，即使被篡改，程序依然能正常运行。
 
 Level 3 的关卡通过将文件的校验和作为 flag，要求我们发现 ELF 文件中所有被篡改的地方，即使这个文件已经可以正常运行。
+
+## Level 4
+
+直接运行 `lvl4`，什么都没有输出，并且正常退出。
+
+```
+$ ./lvl4
+$ echo $?
+0
+```
+
+`.rodata` 中有两个字符串 `XaDht-+1432=/as4?0129mklqt!@cnz^` 和 `FLAG`
+
+```
+$ readelf -x .rodata lvl4
+
+Hex dump of section '.rodata':
+  0x004006d0 01000200 00000000 58614468 742d2b31 ........XaDht-+1
+  0x004006e0 3433323d 2f617334 3f303132 396d6b6c 432=/as4?0129mkl
+  0x004006f0 71742140 636e7a5e 00000000 00000000 qt!@cnz^........
+  0x00400700 464c4147 00                         FLAG.
+```
+
+使用了库函数 `setenv`，似乎不是 C++ 程序。
+
+```
+$ nm -D lvl4
+                 w __gmon_start__
+                 U __libc_start_main
+                 U setenv
+                 U __stack_chk_fail
+```
+
+看一下 `lvl4` 在拿 `setenv` 干啥。
+
+```
+$ ltrace ./lvl4
+__libc_start_main(0x4004a0, 1, 0x7ffc94aeb308, 0x400650 <unfinished ...>
+setenv("FLAG", "656cf8aecb76113a4dece1688c61d0e7"..., 1)                  = 0
++++ exited (status 0) +++
+```
+
+里面有个像 flag 的东西 `656cf8aecb76113a4dece1688c61d0e7`，试一下
+
+```
+$ ./oracle 656cf8aecb76113a4dece1688c61d0e7
++~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+
+| Level 4 completed, unlocked lvl5         |
++~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+
+Run oracle with -h to show a hint
+```
+
+没想到这么轻松就通过了。
+
+这里的 `656cf8aecb76113a4dece1688c61d0e7` 应该是由 `XaDht-+1432=/as4?0129mklqt!@cnz^` 生成的，因为 `.rodata` 里没有。但具体的生成方式这里就不深究了。
