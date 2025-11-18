@@ -585,3 +585,198 @@ Run oracle with -h to show a hint
 没想到这么轻松就通过了。
 
 这里的 `656cf8aecb76113a4dece1688c61d0e7` 应该是由 `XaDht-+1432=/as4?0129mklqt!@cnz^` 生成的，因为 `.rodata` 里没有。但具体的生成方式这里就不深究了。
+
+## Level 5
+
+不论参数，总是输出 `nothing to see here` 并异常退出。
+
+```
+$ ./lvl5
+nothing to see here
+$ ./lvl5 foo bar
+nothing to see here
+$ ./lvl5 show_me_the_flag
+nothing to see here
+$ echo $?
+1
+```
+
+`.rodata` 段的内容
+
+```
+$ readelf -x .rodata lvl5
+
+Hex dump of section '.rodata':
+  0x00400770 01000200 6b657920 3d203078 25303878 ....key = 0x%08x
+  0x00400780 0a006465 63727970 74656420 666c6167 ..decrypted flag
+  0x00400790 203d2025 730a006e 6f746869 6e672074  = %s..nothing t
+  0x004007a0 6f207365 65206865 726500            o see here.
+
+```
+
+如何用上分别位于 `0x400774` 的 `"key = 0x%08x\n"` 和位于 `0x400782` 的 `decrypted flag = %s\n` 这两个字符串呢？
+
+`ltrace` 也没有提供特别的信息。
+
+```
+$ ltrace -i ./lvl5
+[0x400549] __libc_start_main(0x400500, 1, 0x7ffed6430f78, 0x4006f0 <unfinished ...>
+[0x40050e] puts("nothing to see here"nothing to see here
+)                                    = 20
+[0xffffffffffffffff] +++ exited (status 1) +++
+```
+
+`__libc_start_main` 的第一个参数 `0x400500` 应该就是 `main` 的地址，我们看看这附近的代码。
+
+```
+$ objdump -d -M intel lvl5 | grep 400500 -A 7 -B 2 -n
+49-Disassembly of section .text:
+50-
+51:0000000000400500 <.text>:
+52:  400500:    48 83 ec 08             sub    rsp,0x8
+53-  400504:    bf 97 07 40 00          mov    edi,0x400797
+54-  400509:    e8 a2 ff ff ff          call   4004b0 <puts@plt>
+55-  40050e:    b8 01 00 00 00          mov    eax,0x1
+56-  400513:    48 83 c4 08             add    rsp,0x8
+57-  400517:    c3                      ret
+58-  400518:    0f 1f 84 00 00 00 00    nop    DWORD PTR [rax+rax*1+0x0]
+59-  40051f:    00
+--
+67-  40052f:    49 c7 c0 60 07 40 00    mov    r8,0x400760
+68-  400536:    48 c7 c1 f0 06 40 00    mov    rcx,0x4006f0
+69:  40053d:    48 c7 c7 00 05 40 00    mov    rdi,0x400500 // main 函数地址在第一个参数
+70-  400544:    e8 87 ff ff ff          call   4004d0 <__libc_start_main@plt>
+71-  400549:    f4                      hlt
+72-  40054a:    66 0f 1f 44 00 00       nop    WORD PTR [rax+rax*1+0x0]
+73-  400550:    b8 4f 10 60 00          mov    eax,0x60104f
+74-  400555:    55                      push   rbp
+75-  400556:    48 2d 48 10 60 00       sub    rax,0x601048
+76-  40055c:    48 83 f8 0e             cmp    rax,0xe
+```
+
+从结果可以看出来，main 函数的代码只有这样一小段
+
+```
+52:  400500:    48 83 ec 08             sub    rsp,0x8
+53-  400504:    bf 97 07 40 00          mov    edi,0x400797
+54-  400509:    e8 a2 ff ff ff          call   4004b0 <puts@plt>
+55-  40050e:    b8 01 00 00 00          mov    eax,0x1
+56-  400513:    48 83 c4 08             add    rsp,0x8
+57-  400517:    c3                      ret
+```
+
+它仅仅是输出位于 `0x400797` 的 `nothing to see here` 后，就 `return 1`。
+
+看来我们需要改变 `main` 函数的行为，让它与 `.rodata` 中另外的两个字符串交互。
+
+我们直接用文本编辑器打开 `objdump` 后的 `lvl5`，找到 `.text` 段中提到 `0x400774` 和 `0x400782` 的地方。
+
+```
+$ objdump -d -M intel lvl5 > lvl5.dumped
+$ code lvl5.dumped
+// 手动寻找地址 0x400774 0x400782
+$ nl lvl5.dumped | sed -n '136,182p'
+   122    40061d:       00 00 00
+   123    400620:       53                      push   rbx // callee-saved
+   124    400621:       be 74 07 40 00          mov    esi,0x400774 // 第一个地址
+   125    400626:       bf 01 00 00 00          mov    edi,0x1
+   126    40062b:       48 83 ec 30             sub    rsp,0x30 // 设置当前函数的栈帧
+   127    40062f:       64 48 8b 04 25 28 00    mov    rax,QWORD PTR fs:0x28
+   128    400636:       00 00
+   129    400638:       48 89 44 24 28          mov    QWORD PTR [rsp+0x28],rax
+   130    40063d:       31 c0                   xor    eax,eax
+   131    40063f:       48 b8 10 60 21 33 15    movabs rax,0x6223331533216010 // 奇怪的计算逻辑
+   132    400646:       33 23 62
+   133    400649:       c6 44 24 20 00          mov    BYTE PTR [rsp+0x20],0x0
+   134    40064e:       48 89 04 24             mov    QWORD PTR [rsp],rax
+   135    400652:       48 b8 45 65 76 34 41    movabs rax,0x6675364134766545
+   136    400659:       36 75 66
+   137    40065c:       48 89 44 24 08          mov    QWORD PTR [rsp+0x8],rax
+   138    400661:       48 b8 17 67 75 64 10    movabs rax,0x6570331064756717
+   139    400668:       33 70 65
+   140    40066b:       48 89 44 24 10          mov    QWORD PTR [rsp+0x10],rax
+   141    400670:       48 b8 18 35 76 62 11    movabs rax,0x6671671162763518
+   142    400677:       67 71 66
+   143    40067a:       48 89 44 24 18          mov    QWORD PTR [rsp+0x18],rax
+   144    40067f:       8b 1c 25 40 05 40 00    mov    ebx,DWORD PTR ds:0x400540
+   145    400686:       31 c0                   xor    eax,eax
+   146    400688:       89 da                   mov    edx,ebx
+   147    40068a:       e8 51 fe ff ff          call   4004e0 <__printf_chk@plt>
+   148    40068f:       48 8d 54 24 20          lea    rdx,[rsp+0x20]
+   149    400694:       48 89 e0                mov    rax,rsp
+   150    400697:       66 0f 1f 84 00 00 00    nop    WORD PTR [rax+rax*1+0x0]
+   151    40069e:       00 00
+   152    4006a0:       31 18                   xor    DWORD PTR [rax],ebx
+   153    4006a2:       48 83 c0 04             add    rax,0x4
+   154    4006a6:       48 39 d0                cmp    rax,rdx
+   155    4006a9:       75 f5                   jne    4006a0 <__printf_chk@plt+0x1c0>
+   156    4006ab:       31 c0                   xor    eax,eax
+   157    4006ad:       48 89 e2                mov    rdx,rsp
+   158    4006b0:       be 82 07 40 00          mov    esi,0x400782 // 第二个地址
+   159    4006b5:       bf 01 00 00 00          mov    edi,0x1
+   160    4006ba:       e8 21 fe ff ff          call   4004e0 <__printf_chk@plt>
+   161    4006bf:       31 c0                   xor    eax,eax
+   162    4006c1:       48 8b 4c 24 28          mov    rcx,QWORD PTR [rsp+0x28]
+   163    4006c6:       64 48 33 0c 25 28 00    xor    rcx,QWORD PTR fs:0x28
+   164    4006cd:       00 00
+   165    4006cf:       75 06                   jne    4006d7 <__printf_chk@plt+0x1f7>
+   166    4006d1:       48 83 c4 30             add    rsp,0x30 // 清除当前函数的栈帧
+   167    4006d5:       5b                      pop    rbx // 恢复
+   168    4006d6:       c3                      ret
+```
+
+我猜测这个从 `0x400620` 开始到 `0x4006d6` 的部分才是真正我们需要执行的代码段。理由如下：
+- 首先，它很有可能是一个完整的函数。因为：
+	- 以 `push rbx` 开始，以 `pop rbx` 结束，而 `rbx` 是 `callee-saved` 的，的确会在函数开头出现
+	- 操作栈帧：在开头 `sub rsp,0x30`，并在最后 `add rsp,0x30`
+	- 函数地址 16 字节对齐，并且前面有两个零字节填充
+	- 在 `0x4006d6` 第一次出现 `ret`
+- 其次，这个函数很有可能包含关键逻辑
+	- 存在 `0x400774` 和 `0x400782` 这两个地址，作为 `__printf_chk` 的参数。运行这段代码应该就可以输出两个未出现的字符串。
+	- 有一些奇怪的计算逻辑。出现了多次类似于 `movabs rax,0x6223331533216010` 的命令，估计与最后 flag 的计算有关。
+		- 如果是，那么这段代码和之前的挑战一样，是在避免 flag 的值直接明文出现在数据节当中。只不过这次是把解码 flag 的相关数据直接写在代码节当中了。
+
+接下来的问题是怎么让程序的执行流到达这段代码。我们把目光转向先前的 `__libc_start_main`。
+
+```
+69:  40053d:    48 c7 c7 00 05 40 00    mov    rdi,0x400500
+70-  400544:    e8 87 ff ff ff          call   4004d0 <__libc_start_main@plt>
+```
+
+通过修改它的参数，我们可以让另一个完全不同的函数被当成是“main 函数”。
+
+我们把这里的 `0x400500` 改成 `0x400620` 试试。
+
+`0x40053d` 对应在 ELF 文件中的偏移应该是 `0x53d`。先用 `xxd` 确认一下。
+
+```
+$ xxd -seek $((0x53d)) -len 7 lvl5
+0000053d: 48c7 c700 0540 00                        H....@.
+```
+
+没问题。用 `dd` 改一下。
+
+```
+$ cp lvl5 lvl5.1
+$ printf "\x20\x06" | dd of=lvl5.1 bs=1 seek=$((0x53d+3)) conv=notrunc
+```
+
+运行一下试试。
+
+```
+$ ./lvl5.1
+key = 0x00400620
+decrypted flag = 0fa355cbec64a05f7a5d050e836b1a1f
+```
+
+成功了。不过看上去我们好像跳了一步，应该先知道 `key = 0x00400620` 的，而我们直接通过观察代码得到了这个值。
+
+不论如何，我们成功通过了 Level 5.
+
+```
+$ ./oracle 0fa355cbec64a05f7a5d050e836b1a1f
++~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+
+| Level 5 completed, unlocked lvl6         |
++~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+
+Run oracle with -h to show a hint
+```
