@@ -588,6 +588,8 @@ Run oracle with -h to show a hint
 
 ## Level 5
 
+### 收集线索
+
 不论参数，总是输出 `nothing to see here` 并异常退出。
 
 ```
@@ -669,6 +671,8 @@ $ objdump -d -M intel lvl5 | grep 400500 -A 7 -B 2 -n
 
 看来我们需要改变 `main` 函数的行为，让它与 `.rodata` 中另外的两个字符串交互。
 
+### 寻找真正应该执行的代码段
+
 我们直接用文本编辑器打开 `objdump` 后的 `lvl5`，找到 `.text` 段中提到 `0x400774` 和 `0x400782` 的地方。
 
 ```
@@ -725,7 +729,7 @@ $ nl lvl5.dumped | sed -n '136,182p'
    168    4006d6:       c3                      ret
 ```
 
-我猜测这个从 `0x400620` 开始到 `0x4006d6` 的部分才是真正我们需要执行的代码段。理由如下：
+我猜测这个从 `0x400620` 开始到 `0x4006d6` 的部分才是我们真正需要执行的代码段。理由如下：
 - 首先，它很有可能是一个完整的函数。因为：
 	- 以 `push rbx` 开始，以 `pop rbx` 结束，而 `rbx` 是 `callee-saved` 的，的确会在函数开头出现
 	- 操作栈帧：在开头 `sub rsp,0x30`，并在最后 `add rsp,0x30`
@@ -735,6 +739,8 @@ $ nl lvl5.dumped | sed -n '136,182p'
 	- 存在 `0x400774` 和 `0x400782` 这两个地址，作为 `__printf_chk` 的参数。运行这段代码应该就可以输出两个未出现的字符串。
 	- 有一些奇怪的计算逻辑。出现了多次类似于 `movabs rax,0x6223331533216010` 的命令，估计与最后 flag 的计算有关。
 		- 如果是，那么这段代码和之前的挑战一样，是在避免 flag 的值直接明文出现在数据节当中。只不过这次是把解码 flag 的相关数据直接写在代码节当中了。
+
+### 重定向 `__libc_start_main` 的目标
 
 接下来的问题是怎么让程序的执行流到达这段代码。我们把目光转向先前的 `__libc_start_main`。
 
@@ -771,6 +777,8 @@ decrypted flag = 0fa355cbec64a05f7a5d050e836b1a1f
 
 成功了。不过看上去我们好像跳了一步，应该先知道 `key = 0x00400620` 的，而我们直接通过观察代码得到了这个值。
 
+### 反思
+
 重新看了一下 `lvl5.dumped` 的内容，注意到了这两行
 
 ```
@@ -790,6 +798,150 @@ decrypted flag = 0fa355cbec64a05f7a5d050e836b1a1f
 $ ./oracle 0fa355cbec64a05f7a5d050e836b1a1f
 +~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+
 | Level 5 completed, unlocked lvl6         |
++~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+
+Run oracle with -h to show a hint
+```
+
+## Level 6
+
+### 混淆视听的质数
+
+直接运行，打印了 100 以内的质数。
+
+```
+$ ./lvl6
+2 3 5 7 11 13 17 19 23 29 31 37 41 43 47 53 59 61 67 71 73 79 83 89 97
+```
+
+`strings` 中的一些字符串
+
+```
+$ strings -t x -n 2 lvl6
+    3a3 __printf_chk
+    3b0 __stack_chk_fail
+    3c1 putchar
+    3c9 __sprintf_chk
+    3d7 strcmp
+    3de __libc_start_main
+    3f0 setenv
+    3f7 __gmon_start__
+    914 DEBUG: argv[1] = %s
+    929 get_data_addr
+    937 0x%jx
+    93d DATA_ADDR
+    947 %d
+```
+
+`ltrace` 看上去就是把这些质数输出了，最后又有个 `putchar` 不知道在干什么。
+
+```
+$ ltrace ./lvl6
+__libc_start_main(0x4005f0, 1, 0x7ffcbb770a78, 0x400890 <unfinished ...>
+__printf_chk(1, 0x400947, 2, 100)                                         = 2
+__printf_chk(1, 0x400947, 3, 0x7ffffffe)                                  = 2
+...
+__printf_chk(1, 0x400947, 89, 0x7ffffffd)                                 = 3
+__printf_chk(1, 0x400947, 97, 0x7ffffffd)                                 = 3
+putchar(10, 3, 0, 0x7ffffffd2 3 5 7 11 13 17 19 23 29 31 37 41 43 47 53 59 61 67 71 73 79 83 89 97
+)                                             = 10
+```
+
+### 代码节中的数据
+
+回头看看 `strings` 的结果，`DEBUG: argv[1] = %s` 提示我们这次需要提供参数，而 `get_data_addr` 看上去很适合担任这个角色。
+
+```
+$ ./lvl6 get_data_address
+2 3 5 7 11 13 17 19 23 29 31 37 41 43 47 53 59 61 67 71 73 79 83 89 97
+```
+
+结果没有变化？别这么快就认定没变化了，看看 `ltrace` 怎么说。
+
+```
+$ ltrace ./lvl6 get_data_addr
+__libc_start_main(0x4005f0, 2, 0x7ffe6115e598, 0x400890 <unfinished ...>
+strcmp("get_data_addr", "get_data_addr")                                  = 0
+__sprintf_chk(0x7ffe6115e090, 1, 1024, 0x400937)                          = 8
+setenv("DATA_ADDR", "0x4006c1", 1)                                        = 0
+__printf_chk(1, 0x400947, 2, 100)                                         = 2
+__printf_chk(1, 0x400947, 3, 0x7ffffffe)                                  = 2
+...
+__printf_chk(1, 0x400947, 89, 0x7ffffffd)                                 = 3
+__printf_chk(1, 0x400947, 97, 0x7ffffffd)                                 = 3
+putchar(10, 3, 0, 0x7ffffffd2 3 5 7 11 13 17 19 23 29 31 37 41 43 47 53 59 61 67 71 73 79 83 89 97
+)                                             = 10
++++ exited (status 0) +++
+```
+
+在开头多了几个调用，说明我们的参数是选对了。`setenv` 似乎在提示我们 `0x4006c1` 的地方是数据，但是这里不是代码节吗？
+
+```
+$ objdump -d -M intel lvl6 | grep 4006c1 -A 5 -n
+132:  4006c1:   2e 29 c6                cs sub esi,eax
+133-  4006c4:   4a 0f 03 a6 ee 2a 30    rex.WX lsl rsp,WORD PTR [rsi+0x7f302aee]
+134-  4006cb:   7f
+135-  4006cc:   ec                      in     al,dx
+136-  4006cd:   c8 c3 ff 42             enter  0xffc3,0x42
+137-  4006d1:   48 8d ac 24 90 01 00    lea    rbp,[rsp+0x190]
+...
+```
+
+仔细一看这连着 4 个命令咋都不认识呢？中间甚至还滑稽地插进去了一个 `7f`。看来从 `0x4006c1` 开始的这 16 个字节都是数据而不是代码。
+
+用 `xxd` 直接提取。
+
+```
+$ xxd -skip $((0x6c1)) -len 16 -g 0 lvl6
+000006c1: 2e29c64a0f03a6ee2a307fecc8c3ff42  .).J....*0.....B
+```
+
+```
+$ ./oracle 2e29c64a0f03a6ee2a307fecc8c3ff42
+Invalid flag: 2e29c64a0f03a6ee2a307fecc8c3ff42
+```
+
+用 `xxd -e` 再试一下呢？选项 `-e` 表示将目标内容**当作一个小端序的整体**输出，即最后的输出内容高地址位在前。
+
+```
+$ xxd -skip $((0x6c1)) -len 16 -g 0 -e lvl6
+000006c1: 42ffc3c8ec7f302aeea6030f4ac6292e  .).J....*0.....B
+```
+
+```
+$ ./oracle 42ffc3c8ec7f302aeea6030f4ac6292e
+Invalid flag: 42ffc3c8ec7f302aeea6030f4ac6292e
+```
+
+看来我们还需要进一步分析。但我已经确定 `2e29c64a0f03a6ee2a307fecc8c3ff42` 应该就是密码了，也许问题出在 `oracle` 文件。
+
+### 更新软件版本
+
+官网的更新脚本我总是卡在 `Fetching updates...`
+
+```
+$ cd /home/binary && rm -f auto-update.sh \
+>         && wget -q --no-check-certificate https://practicalbinaryanalysis.com/patch/auto-update.sh \
+>         && chmod 755 auto-update.sh && ./auto-update.sh
+Fetching stage 2... OK
+Launching stage 2 updater
+Fetching updates... 
+```
+
+手动从官网上面下载新的 `oracle` 和 `levels.db` 并用 `scp` 传入虚拟机，比较一下跟我们的有没有区别。
+
+```
+$ cmp oracle test/oracle
+oracle test/oracle differ: byte 645, line 1
+$ cmp levels.db test/levels.db
+levels.db test/levels.db differ: byte 42960, line 32
+```
+
+看来的确如此。我们使用新版本的 `oracle` 应该就能通过本关了。
+
+```
+$ ./oracle 2e29c64a0f03a6ee2a307fecc8c3ff42
++~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+
+| Level 6 completed, unlocked lvl7         |
 +~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+
 Run oracle with -h to show a hint
 ```
