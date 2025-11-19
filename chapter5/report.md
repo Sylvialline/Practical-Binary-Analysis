@@ -945,3 +945,273 @@ $ ./oracle 2e29c64a0f03a6ee2a307fecc8c3ff42
 +~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+
 Run oracle with -h to show a hint
 ```
+
+## Level 7
+
+终于还是遇到一开始只给个压缩包的玩法了。
+
+```
+$ file lvl7
+lvl7: gzip compressed data, last modified: Sat Dec  1 17:30:15 2018, from Unix
+$ file -z lvl7
+lvl7: POSIX tar archive (GNU) (gzip compressed data, last modified: Sat Dec  1 17:30:15 2018, from Unix)
+```
+
+是经典的 `.tar.gz` 格式，用 `tar xzf` 解压。
+
+```
+$ tar xvzf lvl7
+stage1
+stage2.zip
+```
+
+得到两个文件。我们先研究一下 `stage1`。
+
+### stage 1
+
+经过若干尝试，最终发现 `.rodata` 节有一段奇怪的内容。
+
+```
+$ readelf -x .rodata stage1
+
+Hex dump of section '.rodata':
+  0x004005a0 01000200 20532954 411147fa deff4532 .... S)TA.G...E2
+  0x004005b0 204b458a 5900                        KE.Y.
+```
+
+看起来这串从 `0x5a5` 开始的 16 字节字符串就是 stage2 的密码。（不得不说这种自我指涉的提示方法真的很有趣）
+
+```
+$ xxd -skip $((0x5a5)) -len 16 -g 0 stage1
+000005a5: 532954411147fadeff4532204b458a59  S)TA.G...E2 KE.Y
+```
+
+`stage2_key` = `532954411147fadeff4532204b458a59`
+
+这个 key 应该是解压 `stage2.zip` 的密码。试试看
+
+```
+$ unzip -P 532954411147fadeff4532204b458a59 stage2.zip
+Archive:  stage2.zip
+   skipping: tmp                     incorrect password
+   skipping: stage2                  incorrect password
+```
+
+不对？也许只有 `STAGE2 KEY` 对应的字节才是答案？手动提取一下得到 `stage2_key` = `535441474532204b4559`。同样不行。
+
+在这 16 个字符中把可见字符去掉的剩下部分？不行。
+
+最后发现原来密码就是 `STAGE2KEY`，也许我的过度解释可以归因为 32 字符密码的先入为主，因为之前的密码都是这个形式，然后看到 `S)TA.G...E2 KE.Y` 写成 16 进制字节也是这个形式，就掉进坑里了。
+
+```
+$ unzip -P STAGE2KEY stage2.zip
+Archive:  stage2.zip
+  inflating: tmp
+  inflating: stage2
+```
+
+不过我还是认为把密码设置为 `532954411147fadeff4532204b458a59` 是很合理的。
+
+### stage 2
+
+#### quine?
+
+解压得到了两个可执行文件。但这两个文件似乎是相同的
+
+```
+$ md5sum stage2
+1eb7e8a43c001ecc3ab13de2dd999f75  stage2
+$ md5sum tmp
+1eb7e8a43c001ecc3ab13de2dd999f75  tmp
+```
+
+我们运行 `stage2` 试试。
+
+```
+$ ./stage2
+#include <stdio.h>
+#include <string.h>
+#include <vector>
+#include <algorithm>
+
+int main()
+{
+std::vector<char> hex;
+char q[] = "#include <stdio.h>\n#include <string.h>\n#include <vector>\n#include <algorithm>\n\nint main()\n{\nstd::vector<char> hex;\nchar q[] = \"%s\";\nint i, _0F;\nchar c, qc[4096];\n\nfor(i = 0; i < 32; i++) for(c = '0'; c <= '9'; c++) hex.push_back(c);\nfor(i = 0; i < 32; i++) for(c = 'A'; c <= 'F'; c++) hex.push_back(c);\nstd::srand(55);\nstd::random_shuffle(hex.begin(), hex.end());\n\n_0F = 0;\nfor(i = 0; i < strlen(q); i++)\n{\nif(q[i] == 0xa)\n{\nqc[_0F++] = 0x5c;\nqc[_0F] = 'n';\n}\nelse if(q[i] == 0x22)\n{\nqc[_0F++] = 0x5c;\nqc[_0F] = 0x22;\n}\nelse if(!strncmp(&q[i], \"0F\", 2) && (q[i-1] == '_' || i == 545))\n{\nchar buf[3];\nbuf[0] = q[i];\nbuf[1] = q[i+1];\nbuf[2] = 0;\nunsigned j = strtoul(buf, NULL, 16);\nqc[_0F++] = q[i++] = hex[j];\nqc[_0F] = q[i] = hex[j+1];\n}\nelse qc[_0F] = q[i];\n_0F++;\n}\nqc[_0F] = 0;\n\nprintf(q, qc);\n\nreturn 0;\n}\n";
+int i, _0F;
+char c, qc[4096];
+
+for(i = 0; i < 32; i++) for(c = '0'; c <= '9'; c++) hex.push_back(c);
+for(i = 0; i < 32; i++) for(c = 'A'; c <= 'F'; c++) hex.push_back(c);
+std::srand(55);
+std::random_shuffle(hex.begin(), hex.end());
+
+_0F = 0;
+for(i = 0; i < strlen(q); i++)
+{
+if(q[i] == 0xa)
+{
+qc[_0F++] = 0x5c;
+qc[_0F] = 'n';
+}
+else if(q[i] == 0x22)
+{
+qc[_0F++] = 0x5c;
+qc[_0F] = 0x22;
+}
+else if(!strncmp(&q[i], "0F", 2) && (q[i-1] == '_' || i == 545))
+{
+char buf[3];
+buf[0] = q[i];
+buf[1] = q[i+1];
+buf[2] = 0;
+unsigned j = strtoul(buf, NULL, 16);
+qc[_0F++] = q[i++] = hex[j];
+qc[_0F] = q[i] = hex[j+1];
+}
+else qc[_0F] = q[i];
+_0F++;
+}
+qc[_0F] = 0;
+
+printf(q, qc);
+
+return 0;
+}
+```
+
+看上去返回了一串代码，仔细读一读，这是一份 quine（自指程序）？看来 Level 7 的主题就是**自指**了。我们看一下它是不是真的自指。
+
+```
+$ ./stage2 > stage2.cc
+$ g++ stage2.cc -o stage2.1
+$ ./stage2.1 > stage2.1.cc
+```
+
+```
+$ diff stage2 stage2.1
+Binary files stage2 and stage2.1 differ
+$ cmp stage2.cc stage2.1.cc
+stage2.cc stage2.1.cc differ: byte 279, line 9
+```
+
+我们发现用 `stage2` 生成的代码 `stage2.cc` 重新编译为可执行文件 `stage2.1` 后，其输出与 `stage2` 的输出不同。看来不是完美的 quine，但具体有哪些不同呢？
+
+通过 `diff` 工具或者直接查看可以发现，`stage2.cc` 中的变量 `_0F` 变成了 `_25`，包括 `char q[]` 中 `0F` 的所有出现。即输出中所有的 `0F` 都变成了 `25`， 而其他部分没有任何变化。
+
+也许这是个 Cyclic Quine。多运行几次，把这个变量的名字变化记录下来，或许就是 flag。
+
+不过多次运行太过麻烦，我们还是分析一下代码，找一下变量名的循环规律吧。
+
+#### `state2.cc` 代码分析
+
+首先，这一步 `printf` 的结果就是整份代码
+
+```
+printf(q, qc);
+```
+
+其中字符串 `q` 包含了代码中的大部分内容，但除了下一份代码中的 `q` 自己。因为它没办法显式地包括自己，所以这部分只能由 `%s` 替代，后续通过动态填充 `qc` （过程中需要处理转义）来达到输出自己的目的。
+
+```
+char q[] = "#include <stdio.h>\n#include <string.h>\n#include <vector>\n#include <algorithm>\n\nint main()\n{\nstd::vector<char> hex;\nchar q[] = \"%s\";\nint i, _0F;\nchar c, qc[4096];\n\nfor(i = 0; i < 32; i++) for(c = '0'; c <= '9'; c++) hex.push_back(c);\nfor(i = 0; i < 32; i++) for(c = 'A'; c <= 'F'; c++) hex.push_back(c);\nstd::srand(55);\nstd::random_shuffle(hex.begin(), hex.end());\n\n_0F = 0;\nfor(i = 0; i < strlen(q); i++)\n{\nif(q[i] == 0xa)\n{\nqc[_0F++] = 0x5c;\nqc[_0F] = 'n';\n}\nelse if(q[i] == 0x22)\n{\nqc[_0F++] = 0x5c;\nqc[_0F] = 0x22;\n}\nelse if(!strncmp(&q[i], \"0F\", 2) && (q[i-1] == '_' || i == 545))\n{\nchar buf[3];\nbuf[0] = q[i];\nbuf[1] = q[i+1];\nbuf[2] = 0;\nunsigned j = strtoul(buf, NULL, 16);\nqc[_0F++] = q[i++] = hex[j];\nqc[_0F] = q[i] = hex[j+1];\n}\nelse qc[_0F] = q[i];\n_0F++;\n}\nqc[_0F] = 0;\n\nprintf(q, qc);\n\nreturn 0;\n}\n";
+```
+
+`qc` 基本上就是 `q` 的一个副本，只是要处理下面的问题：
+- 将 `q` 中出现的换行符 `'\n'=0x0a` 替换为两个字符 `'\'=0x5c` 和 `'n'`。之所以代码中要以 `0x5c` 代替 `'\'`（`0x0a` 同理），是因为 `'\'` 会再次引入转义字符 `\`（实际上仍然可行，只是不方便）。
+
+	```cpp
+	if(q[i] == 0xa)
+	{
+	qc[_0F++] = 0x5c;
+	qc[_0F] = 'n';
+	}
+	```
+
+- 将 `q` 中出现的换行符 `'"'=0x22` 替换为两个字符 `'\'=0x5c` 和 `'"'=0x22`。
+
+	```cpp
+	else if(q[i] == 0x22)
+	{
+	qc[_0F++] = 0x5c;
+	qc[_0F] = 0x22;
+	}
+	```
+
+- 这一步是变量名循环的逻辑：找到代码中所有出现当前变量名的位置，并把它换成以它自己在 `hex[]` 中索引后得到的字符串。`545` 应该对应着 `strncmp(&q[i], "0F", 2)` 中出现的变量名。（实际上表达式 `(q[i-1] == '_' || i == 545)` 在前面成立的的情况下应该是恒真的）
+
+	```cpp
+	else if(!strncmp(&q[i], "0F", 2) && (q[i-1] == '_' || i == 545))
+	{
+	char buf[3];
+	buf[0] = q[i];
+	buf[1] = q[i+1];
+	buf[2] = 0;
+	unsigned j = strtoul(buf, NULL, 16);
+	qc[_0F++] = q[i++] = hex[j];
+	qc[_0F] = q[i] = hex[j+1];
+	}
+	```
+
+了解了这些，我们可以直接编写代码找到变量名循环的规律。
+
+```cpp
+/* flag.cc */
+#include <vector>
+#include <algorithm>
+#include <string>
+#include <sstream>
+#include <iomanip>
+#include <iostream>
+
+int main() {
+    std::vector<char> hex;
+    int i;
+    char c;
+    for(i = 0; i < 32; i++) for(c = '0'; c <= '9'; c++) hex.push_back(c);
+    for(i = 0; i < 32; i++) for(c = 'A'; c <= 'F'; c++) hex.push_back(c);
+    std::srand(55);
+    std::random_shuffle(hex.begin(), hex.end());
+
+    int n=0x0f;
+    i = 0;
+    do{
+        char buf[3];
+        std::stringstream ss;
+        ss << std::hex << std::setfill('0') << std::setw(2) << n;
+        buf[0] = hex[n];
+        buf[1] = hex[n+1];
+        buf[2] = 0;
+        n = std::stoul(buf, nullptr, 16);
+        std::cout << ss.str();
+        if(++i > 100)break;
+    }while(n!=0x0f);
+    std::cout<<'\n';
+
+    return 0;
+}
+```
+
+因为初始的 `0f` 可能不在循环节里（如果将每一次 n 的值抽象为节点，一次变换就连一条边，则边数与点数相同，构成基环树森林），因此我们直接打印 100 个 n 手动找循环节
+
+```
+$ g++ -std=c++11 flag.cc -o flag
+$ ./flag
+0f25e512a7763eefb7696b3aeda1f964703eefb7696b3aeda1f964703eefb7696b3aeda1f964703eefb7696b3aeda1f964703eefb7696b3aeda1f964703eefb7696b3aeda1f964703eefb7696b3aeda1f964703eefb7696b3aeda1f964703eefb7696b3aed
+```
+
+循环节是 `3eefb7696b3aeda1f96470`，可惜只有 11 个字节。进入循环之前的字符串是 `0f25e512a776`，有 6 个字节，加上 11 也比 16 大了 1。
+
+也许跟循环节没有关系，我们只需要取前 16 个字节 `0f25e512a7763eefb7696b3aeda1f964` 就好了。
+
+```
+$ ./oracle 0f25e512a7763eefb7696b3aeda1f964
++~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+
+| Level 7 completed, unlocked lvl8         |
++~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+
+Run oracle with -h to show a hint
+```
+
+成功通过 Level 7. 到最后也不知道 `tmp` 是何意。
+
+
