@@ -1936,3 +1936,21 @@ $ ./oracle 2235a6b2123404469f4abce71b1dd29f
 +~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+
 Run oracle with -h to show a hint
 ```
+
+## Reward
+
+迫不及待地用 `tar` 打开我们来之不易的 `reward.tar.gz`
+
+```
+$ tar xvzf reward.tar.gz
+runme.sh
+wall_1024x768.jpg
+wall_1920x1080.jpg
+wall_1920x1200.jpg
+$ ./runme.sh
+Setting wallpaper... Done!
+```
+
+![[wall_1920x1200.jpg]]
+
+感谢观看
