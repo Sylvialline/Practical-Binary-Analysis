@@ -331,8 +331,7 @@ system("md5sum ./lvl3"6218c46c1d2fdde6e5ed85eeee63aea1  ./lvl3
 ```
 
 我们已经能够将 `lvl3` 做的事情刻画得很清楚了。它将位于 `.rodata` 的 `md5sum `
-与 `argv[0]` 用 `strcat` 连接成命令 `md5sum ./lvl3` ，并使用 `system` 运行这个命令。这个过程会产生子进程，当子进程结束后，命令输出到标准输出中，`lvl3`
-正常退出。
+与 `argv[0]` 用 `strcat` 连接成命令 `md5sum ./lvl3` ，并使用 `system` 运行这个命令。这个过程会产生子进程，当子进程结束后，命令输出到标准输出中，`lvl3` 正常退出。
 
 而先前的两部分输出实际上是 `md5sum` 的行为。
 
@@ -349,7 +348,7 @@ $ md5sum lvl3
 
 #### 被篡改的 `e_ident[EI_OSABI]`
 
-我们现在得到了一个计算自己的 MD5 校验和的程序，但是目前的输出并不是有效的 flag。这意味着什么？也许是 `lvl3` 中还有被人为篡改的地方，我们还没发现。虽然该程序现在已经能够正常运行了，但是这并不代表就没有不影响运行的篡改。
+我们现在得到了一个计算自己的 MD5 校验和的程序，但是目前的输出并不是有效的 flag。这意味着什么？也许是 `lvl3` 中还有被人为篡改的地方，我们还没发现。虽然该程序现在已经能够正常运行了，但是这**并不代表就没有不影响运行的篡改**。
 
 目前为止我们都在 `lvl3` 的 elf 头部操作，我们看看这里面是否还有奇怪的地方。
 
@@ -786,7 +785,7 @@ decrypted flag = 0fa355cbec64a05f7a5d050e836b1a1f
    146    400688:       89 da                   mov    edx,ebx
 ```
 
-意思是把 `0x400540` 开始的四个字节赋值到 `ebx` 中，接着赋值到 `ebx` 中，作为接下来 `__printf_chk` 的参数。而这里的 `0x400540` 正好对应着我们之前算的 `0x53d+3`，即 `call __libc_start_main` 之前准备的参数 `mov rdi,???`。
+意思是把 `0x400540` 开始的四个字节赋值到 `ebx` 中，接着赋值到 `edx` 中，作为接下来 `__printf_chk` 的参数。而这里的 `0x400540` 正好对应着我们之前算的 `0x53d+3`，即 `call __libc_start_main` 之前准备的参数 `mov rdi,???`。
 
 也就是说，正常的操作是先注意到反汇编代码中的神秘地址 `0x400540`，知道这是我们要改的部分，然后继续后面的操作，而不是冒险直接修改 `__libc_start_main` 的操作（虽然后来我们知道这是可行的）。
 
@@ -1153,6 +1152,8 @@ char q[] = "#include <stdio.h>\n#include <string.h>\n#include <vector>\n#include
 	}
 	```
 
+#### 编写代码模拟 Cyclic Quine 的行为
+
 了解了这些，我们可以直接编写代码找到变量名循环的规律。
 
 ```cpp
@@ -1214,4 +1215,724 @@ Run oracle with -h to show a hint
 
 成功通过 Level 7. 到最后也不知道 `tmp` 是何意。
 
+## Level 8
 
+### 完成本关卡后的我的说明
+
+本关卡中涉及的文件很多，因此使用 makefile 管理，最终的 makefile 我直接贴在下面，便于读者理清思路。
+
+```makefile
+CXX = g++
+CXXFLAGS = -O2 -std=c++11 -Wall -Wextra
+
+PROGS = \
+    text2bits \
+    bits2bin \
+	bmp2rgb \
+	rgb2json \
+	rgb2bits
+
+FILES = \
+	bits1.txt \
+	elf.bmp \
+	rgb.txt \
+	rgb.json \
+	bits2.txt \
+	elf_untruncated \
+	elf \
+	elf_repaired
+
+all: $(PROGS)
+
+flag: elf_repaired
+	./elf_repaired
+
+text2bits: text2bits.cc
+	$(CXX) $(CXXFLAGS) $< -o $@
+
+bits2bin: bits2bin.cc
+	$(CXX) $(CXXFLAGS) $< -o $@
+
+bmp2rgb: bmp2rgb.cc
+	$(CXX) $(CXXFLAGS) $< -o $@
+
+rgb2json: rgb2json.cc
+	$(CXX) $(CXXFLAGS) $< -o $@
+
+rgb2bits: rgb2bits.cc
+	$(CXX) $(CXXFLAGS) $< -o $@
+
+
+bits1.txt: text2bits lvl8
+	./text2bits < lvl8 > bits1.txt
+
+elf.bmp: text2bits lvl8 bits2bin
+	./text2bits < lvl8 | ./bits2bin > elf.bmp
+
+rgb.txt: bmp2rgb elf.bmp
+	./bmp2rgb < elf.bmp > rgb.txt
+
+rgb.json: bmp2rgb rgb2json elf.bmp
+	./bmp2rgb < elf.bmp | ./rgb2json > rgb.json
+
+bits2.txt: rgb2bits bits2bin
+	./rgb2bits < rgb.txt > bits2.txt
+
+elf_untruncated: rgb2bits bits2bin rgb.txt
+	./rgb2bits < rgb.txt | ./bits2bin > elf_untruncated
+
+elf: elf_untruncated
+	dd count=8896 if=elf_untruncated of=elf bs=1
+
+elf_repaired: elf
+	cp elf elf_repaired
+	printf "\360" | dd of=elf_repaired bs=1 seek=$$((0x6a1)) conv=notrunc
+	chmod 777 elf_repaired
+
+debug:
+	printf "\xf0" | hexdump -C
+
+clean:
+	rm -f $(PROGS) $(FILES)
+
+.PHONY: all flag clean
+
+```
+
+### 尝试和分析
+
+`lvl8` 是一个文本文件，包含近万个段落，段落之间由两个换行符分隔，与正常英文文本的区别可能只是其中的单词大部分虽然**可以拼读**出来，但都是陌生的英文单词，或者说像是其他语言中的单词。
+
+```
+$ file lvl8
+lvl8: ASCII text, with very long lines
+
+$ more lvl8
+lOrem iPsuM doLOr SIT AmEt, conseCTETur adipIscing elit. maecenas eget augue sed leo suscipit ultrICiES sed blandit urna
+. sed ut risus vitAe Ligula semper scelerisque. fusce et UlTRices telluS, non commodo elit. nullA fACilisi. inteGer phar
+etra eu massa et ultrIces. nunc dignISsim nisl eu nulla ultricies venenatis. fusce tincidUnT NibH risuS, IN VulputaTe li
+bero congue A. cuRabituR eST diam, lacinia vel placeRat Eget, seMpER nec enim.
+
+proin turpis metus, finibus in porttitor sed, tempor nec ante. nulla ornare volutpat mi, siT AMET VOlUTPAT NUNC. AENEAN
+...
+```
+
+进一步我们发现其实同一个单词会改变自己的大小写在文本中多次出现。写一段 python 脚本统计单词数量。（这个脚本只是观察文本性质，没有写在 makefile 里面）
+
+```python
+# wc.py
+# -*- coding: utf-8 -*-
+import sys
+import re
+from collections import Counter
+
+def main():
+    if len(sys.argv) != 2:
+        print("Usage: python %s <filename>" % sys.argv[0])
+        sys.exit(1)
+    filename = sys.argv[1]
+    try:
+        with open(filename, "r") as f:
+            text = f.read()
+    except Exception as e:
+        print("Error reading file: %s" % e)
+        sys.exit(1)
+        
+    # text = text.lower() # 注释此行则大小写不敏感
+    
+    # 提取单词
+    words = re.findall(r"[A-Za-z0-9]+", text)
+    counter = Counter(words)
+    # 输出：按出现次数从多到少排序
+    for word, count in counter.most_common():
+        print("%s: %d" % (word, count))
+
+
+if __name__ == "__main__":
+    main()
+
+```
+
+```
+$ python wc.py lvl8 > count.txt # 大小写不敏感
+$ python wc.py lvl8 > count_sensitive.txt # 大小写敏感
+$ wc count.txt count_sensitive.txt
+   187    374   2429 count.txt
+  9149  18298 109885 count_sensitive.txt
+  9336  18672 112314 total
+```
+
+python 脚本的处理结果显示，如果大小写敏感地统计，有 9149 个不同单词，但如果大小写不敏感，则只有 187 个不同单词。
+
+```
+$ tail -1 lvl8
+UT venenatis libero n
+# 文末无换行符
+$ tail count.txt
+inceptos: 159
+himenaeos: 159
+conubia: 159
+taciti: 159
+ad: 159
+class: 159
+potenti: 130
+curae: 129
+cubilia: 129
+n: 1
+```
+
+最后这个 `n` 出现很突兀，它只在文章最后出现一次。也许是一个以 `n` 开头的单词被截断了？
+
+### 隐藏在文本中的二进制信息
+
+#### text2bits.cc
+
+可以随意被截断，也许意味着文本内容其实并不重要。换句话说，它只是一种**载波**，真正重要的是大小写，它是载波上的**数据**。我把大小写信息转化为 01 比特流试试。
+
+```cpp
+// text2bits.cc
+#include <iostream>
+#include <cctype>
+using namespace std;
+
+/*
+标准输入：任意文本
+标准输出：看到字母则输出 bit（小写=0，大写=1），非字母忽略
+*/
+
+int main() {
+    ios::sync_with_stdio(false); // 关闭同步流，加速输出
+    cin.tie(nullptr);
+    char ch;
+    while (cin.get(ch)) {
+        if (isalpha(ch)) {
+            if (islower(ch)) cout << '0';
+            else             cout << '1';
+        }
+    }
+    return 0;
+}
+
+```
+
+#### bits2bin.cc
+
+尝试了多种大端/小端，大小写与 01 的对应关系的组合，最终发现**大端**加**小写对应 0，大写对应 1** 可以解码出有意义的二进制文件。
+
+```cpp
+#include <iostream>
+using namespace std;
+
+/*
+标准输入：01 字符串
+标准输出：按大端序组装成的字节流
+*/
+
+int main() {
+    char bit;
+    unsigned char byte = 0;
+    int count = 0;
+
+    while (cin.get(bit)) {
+        if (bit != '0' && bit != '1') continue;
+
+        byte = (byte << 1) | (bit - '0'); // big-endian
+        count++;
+
+        if (count == 8) {
+            cout.put(byte);
+            byte = 0;
+            count = 0;
+        }
+    }
+
+    if (count > 0) {
+        byte <<= (8 - count);
+        cout.put(byte);
+    }
+
+    return 0;
+}
+
+```
+
+在 makefile 中构建好编译命令并执行。
+
+```
+$ make elf.bmp
+g++ -O2 -std=c++11 -Wall -Wextra text2bits.cc -o text2bits
+g++ -O2 -std=c++11 -Wall -Wextra bits2bin.cc -o bits2bin
+./text2bits < lvl8 | ./bits2bin > elf.bmp
+```
+
+提取出来的文件是一个 `PC bitmap`
+
+```
+$ file elf.bmp
+elf.bmp: PC bitmap, Windows 3.x format, 300 x 300 x 24
+```
+
+`elf.bmp` 长这样
+
+![[elf.bmp]]
+
+谷歌搜图后发现这个人物的名字是 *Buddy the Elf*。看来这张图片里面还藏着一个 ELF，我们要设法将其找出。
+
+### 隐藏在图像中的二进制信息
+
+如果让你想个办法，把一个二进制文件藏在图像里，你会怎么做？一个简单的方法是，把这个图像的每个像素的颜色分量对应加上你想隐藏的二进制文件的 0 和 1.
+
+如果是普通的彩色图像，如此操作后很难解码出增加的噪声信息，但对于这张只有几个基本颜色的像素画，解码就不是很困难了。
+
+还有一个细节也许可以支撑我们的猜想。`file` 命令的输出显示这是一张 `300 x 300` 的图像，但是看上去分辨率只有 `25 x 25`。也许是为了放下一个 `ELF` 文件的信息，把图像扩大了 12 倍。
+
+接下来我们看看这个文件的颜色分布。
+
+#### bmp2rgb.cc
+
+这份代码读入一个 `bmp` 图像，输出每一个像素的 rgb 值，格式是每行一个 `#RRGGBB`。注意在 `bmp` 格式中三颜色分量的数据是 B 在前，R 在后。
+
+```cpp
+//bmp2rgb.cc
+#include <iostream>
+#include <vector>
+#include <cstdio>
+using namespace std;
+
+/*
+标准输入：完整 24 位 BMP 文件
+标准输出：每行一个 #RRGGBB
+*/
+
+uint32_t read_le(const vector<unsigned char>& buf, int& pos, int size) {
+    uint32_t v = 0;
+    for (int i = 0; i < size; i++) {
+        v |= (buf[pos++] << (8 * i));
+    }
+    return v;
+}
+
+int main() {
+    // ---- 读入所有 stdin 数据到内存 ----
+    vector<unsigned char> buf(
+        (istreambuf_iterator<char>(cin)),
+        istreambuf_iterator<char>()
+    );
+    int pos = 0;
+
+    if (buf.size() < 54) {
+        cerr << "输入太小，不是 BMP\n";
+        return 1;
+    }
+
+    // ---- BMP header ----
+    if (buf[0] != 'B' || buf[1] != 'M') {
+        cerr << "不是 BMP 文件\n";
+        return 1;
+    }
+    pos = 10;
+    uint32_t pixel_offset = read_le(buf, pos, 4);
+    pos = 14;
+
+    uint32_t dib_size = read_le(buf, pos, 4);
+    if (dib_size < 40) {
+        cerr << "DIB header 太小\n";
+        return 1;
+    }
+
+    int32_t width  = read_le(buf, pos, 4);
+    int32_t height = read_le(buf, pos, 4);
+
+    pos += 2; // planes
+    uint16_t bpp = read_le(buf, pos, 2);
+    if (bpp != 24) {
+        cerr << "仅支持 24-bit BMP\n";
+        return 1;
+    }
+
+    uint32_t compression = read_le(buf, pos, 4);
+    if (compression != 0) {
+        cerr << "不支持压缩 BMP\n";
+        return 1;
+    }
+
+    // ---- 跳到像素数据 ----
+    pos = pixel_offset;
+
+    int row_bytes = width * 3;
+    int padding = (4 - (row_bytes % 4)) % 4;
+    int h = height > 0 ? height : -height;
+
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < width; x++) {
+            unsigned char b = buf[pos++];
+            unsigned char g = buf[pos++];
+            unsigned char r = buf[pos++];
+            printf("#%02X%02X%02X\n", r, g, b);
+        }
+        pos += padding;
+    }
+
+    return 0;
+}
+```
+
+#### rgb2json.cc
+
+然后我们统计一下各颜色的分布情况。
+
+```cpp
+#include <iostream>
+#include <map>
+#include <string>
+using namespace std;
+
+/*
+标准输入：每行一个 #RRGGBB
+程序功能：统计颜色个数
+标准输出：按 key 排序的 JSON
+*/
+
+int main() {
+    map<string, int> cnt;
+    string line;
+
+    while (cin >> line) {
+        cnt[line]++;
+    }
+
+    cout << "{\n";
+    bool first = true;
+    for (auto &p : cnt) {
+        if (!first) cout << ",\n";
+        first = false;
+        cout << "  \"" << p.first << "\": " << p.second;
+    }
+    cout << "\n}\n";
+
+    return 0;
+}
+
+```
+
+使用 makefile 编译运行。
+
+```
+$ make rgb.json
+g++ -O2 -std=c++11 -Wall -Wextra bmp2rgb.cc -o bmp2rgb
+g++ -O2 -std=c++11 -Wall -Wextra rgb2json.cc -o rgb2json
+./bmp2rgb < elf.bmp | ./rgb2json > rgb.json
+```
+
+`rgb.json` 的结果如下
+
+```json
+{
+  "#000000": 17643,
+  "#000001": 389,
+  "#000100": 341,
+  "#000101": 269,
+  "#010000": 379,
+  "#010001": 227,
+  "#010100": 259,
+  "#010101": 365,
+  "#3A3A3A": 535,
+  "#3A3A3B": 12,
+  "#3A3B3A": 10,
+  "#3A3B3B": 4,
+  "#3B3A3A": 15,
+  "#3B3A3B": 1,
+  "#3B3B3A": 6,
+  "#3B3B3B": 1433,
+  "#54AA00": 720,
+  "#54AA01": 27,
+  "#54AB00": 19,
+  "#54AB01": 20,
+  "#55AA00": 8662,
+  "#55AA01": 22,
+  "#55AB00": 20,
+  "#55AB01": 14,
+  "#5E4106": 1440,
+  "#FEFE00": 3093,
+  "#FEFE01": 169,
+  "#FEFEFE": 7157,
+  "#FEFEFF": 381,
+  "#FEFF00": 147,
+  "#FEFF01": 143,
+  "#FEFFFE": 357,
+  "#FEFFFF": 287,
+  "#FFD5B0": 6336,
+  "#FFFE00": 199,
+  "#FFFE01": 138,
+  "#FFFEFE": 441,
+  "#FFFEFF": 286,
+  "#FFFF00": 1023,
+  "#FFFF01": 128,
+  "#FFFFFE": 281,
+  "#FFFFFF": 36602
+}
+```
+
+### 对颜色分布的分析
+
+我们发现一些相近的颜色一起出现，比如伴随着大量出现的黑色 `#000000`，同时有少量的 `#000001` 或者 `#010101` 等的出现，变体包括自己一共有 8 个，刚好对应着三位二进制数。其他的还有 `#3A3A3A`  `#54AA00` `#FEFEFE`，都有对应三位二进制数的 8 个变体。
+
+但同时还有两种颜色，`#5E4106` 和 `#FFD5B0`，没有变体，且出现次数都刚好是 144 的倍数，说明这两种颜色的像素没有加 01 噪声，处理的时候不应该算这两种颜色。
+
+#### rgb2bits.cc
+
+接下来我们尝试着编写代码，提取 Elf 图像中的 ELF。
+
+具体的映射规则、小端大端等顺序，需要多次尝试，最后得到这个正确版本。
+
+```cpp
+// rgb2bits.cc
+#include <iostream>
+#include <string>
+#include <map>
+using namespace std;
+
+/*
+标准输入：每行一个 #RRGGBB
+标准输出：对每行输出 3 个 bit，规则见 bit 内容
+*/
+map<string, char> bit{
+    {"00", '0'},
+    {"01", '1'},
+    {"3A", '0'},
+    {"3B", '1'},
+    {"FE", '0'},
+    {"FF", '1'},
+    {"54", '0'},
+    {"55", '1'},
+    {"AA", '0'},
+    {"AB", '1'},
+};
+int main() {
+    ios::sync_with_stdio(false);
+    cin.tie(nullptr);
+    string s;
+    while (cin >> s) {
+        if(s.substr(1, 6) == "5E4106" || s.substr(1, 6) == "FFD5B0")
+            continue;
+        cout << bit[s.substr(5,2)] << bit[s.substr(3,2)] << bit[s.substr(1,2)];
+    }
+    return 0;
+}
+```
+
+运行得到的 ELF 文件大概率是有大量无效信息在文件末尾的，我们需要使用 ELF 头中的信息计算有效大小并精确截取 ELF 文件对应的部分。
+
+```
+$ make elf_untruncated 
+g++ -O2 -std=c++11 -Wall -Wextra rgb2bits.cc -o rgb2bits
+./rgb2bits < rgb.txt | ./bits2bin > elf_untruncated
+
+$ file elf_untruncated
+elf_untruncated: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, for GNU/Linux 2.6.32, BuildID[sha1]=3f43c1bc1bc2d1dccc12d2fbb1cb83347e8cb3b4, not stripped
+```
+
+计算一下 ELF 文件大小
+
+```
+$ readelf -h elf
+ELF Header:
+  Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00
+  Class:                             ELF64
+  Data:                              2's complement, little endian
+  Version:                           1 (current)
+  OS/ABI:                            UNIX - System V
+  ABI Version:                       0
+  Type:                              EXEC (Executable file)
+  Machine:                           Advanced Micro Devices X86-64
+  Version:                           0x1
+  Entry point address:               0x4004e0
+  Start of program headers:          64 (bytes into file)
+  Start of section headers:          6912 (bytes into file)
+  Flags:                             0x0
+  Size of this header:               64 (bytes)
+  Size of program headers:           56 (bytes)
+  Number of program headers:         9
+  Size of section headers:           64 (bytes)
+  Number of section headers:         31
+  Section header string table index: 28
+```
+
+$$
+\text{elf\_size}=6912+31\times 64+4=8896
+$$
+
+而当前的文件大小是 `30834`。的确需要截断。
+
+```
+$ ls -l elf_untruncated
+-rw-rw-r-- 1 binary binary 30834 nov 21 13:38 elf_untruncated
+```
+
+使用 `dd` 截取文件。
+
+```
+$ dd count=8896 if=elf_untruncated of=elf bs=1
+8896+0 records in
+8896+0 records out
+8896 bytes (8,9 kB, 8,7 KiB) copied, 0,0206838 s, 430 kB/s
+```
+
+### 对 elf 文件的分析
+
+直接运行没有任何输出。`.data` 段有 `0x53=83` 个不知何意的字节。
+
+```
+$ readelf -x .data -x .rodata elf
+
+Hex dump of section '.rodata':
+  0x00400730 01000200                            ....
+
+
+Hex dump of section '.data':
+  0x00601040 00000000 00000000 00000000 00000000 ................
+  0x00601050 00000000 00000000 00000000 00000000 ................
+  0x00601060 9c9d9e9a 9b74cdcc cccc73cd cccccc84 .....t....s.....
+  0x00601070 41f9d4cc cccc8447 d9fecccc ccc3c993 A......G........
+  0x00601080 92969594 74f0cccc cc84fd33 c3c9fefe ....t......3....
+  0x00601090 fff9adfa aefefdfe fff8fcf8 f8faf5aa ................
+  0x006010a0 f8adaeaf a9fbfdae fda8a8fe f5aaccec ................
+  0x006010b0 cccccc00 53000000                   ....S...
+```
+
+因为该文件没有被 stripped，我们直接看一下汇编代码。
+
+```
+00000000004005d6 <main>:
+  4005d6:	55                   	push   rbp
+  4005d7:	48 89 e5             	mov    rbp,rsp
+  4005da:	48 83 ec 30          	sub    rsp,0x30
+  4005de:	89 7d dc             	mov    DWORD PTR [rbp-0x24],edi
+  4005e1:	48 89 75 d0          	mov    QWORD PTR [rbp-0x30],rsi
+  
+// 后续没有使用 [rbp-0x30] 和 [rbp-0x24]，应该没用上参数
+
+  4005e5:	be 00 10 00 00       	mov    esi,0x1000
+  4005ea:	bf 00 10 00 00       	mov    edi,0x1000
+  4005ef:	e8 bc fe ff ff       	call   4004b0 <memalign@plt>
+  
+// memalign(4096, 4096) = 0x9bc000
+//  *(rbp-0x10) = 0x9bc000
+// char flag_bin[] = 0x9bc000
+
+  4005f4:	48 89 45 f0          	mov    QWORD PTR [rbp-0x10],rax
+  4005f8:	48 8b 45 f0          	mov    rax,QWORD PTR [rbp-0x10]
+  4005fc:	ba 03 00 00 00       	mov    edx,0x3
+  400601:	be 00 10 00 00       	mov    esi,0x1000
+  400606:	48 89 c7             	mov    rdi,rax
+  400609:	e8 b2 fe ff ff       	call   4004c0 <mprotect@plt>
+
+// mprotect(0x9bc000, 4096, PROT_READ | PROT_WRITE = 3) = 0
+// flag_bin_len = 83
+
+  40060e:	8b 05 a0 0a 20 00    	mov    eax,DWORD PTR [rip+0x200aa0]        # 6010b4 <flag_bin_len>
+  400614:	89 c2                	mov    edx,eax
+  400616:	48 8b 45 f0          	mov    rax,QWORD PTR [rbp-0x10]
+  40061a:	be 60 10 60 00       	mov    esi,0x601060
+  40061f:	48 89 c7             	mov    rdi,rax
+  400622:	e8 79 fe ff ff       	call   4004a0 <memcpy@plt>
+
+// memcpy(0x9bc000, 0x601060, 83) = 0x9bc000
+// flag_bin[0~82] = 9c9d9e9a...
+
+  400627:	8b 05 87 0a 20 00    	mov    eax,DWORD PTR [rip+0x200a87]        # 6010b4 <flag_bin_len>
+  40062d:	89 c2                	mov    edx,eax
+  40062f:	48 8b 45 f0          	mov    rax,QWORD PTR [rbp-0x10]
+  400633:	48 01 d0             	add    rax,rdx
+  400636:	c6 00 c3             	mov    BYTE PTR [rax],0xc3
+
+// flag_bin[83] = 0xc3 = ret 指令
+
+  400639:	c7 45 ec 00 00 00 00 	mov    DWORD PTR [rbp-0x14],0x0
+  400640:	eb 26                	jmp    400668 <main+0x92>
+  400642:	8b 45 ec             	mov    eax,DWORD PTR [rbp-0x14]
+  400645:	48 63 d0             	movsxd rdx,eax
+  400648:	48 8b 45 f0          	mov    rax,QWORD PTR [rbp-0x10]
+  40064c:	48 01 d0             	add    rax,rdx
+  40064f:	8b 55 ec             	mov    edx,DWORD PTR [rbp-0x14]
+  400652:	48 63 ca             	movsxd rcx,edx
+  400655:	48 8b 55 f0          	mov    rdx,QWORD PTR [rbp-0x10]
+  400659:	48 01 ca             	add    rdx,rcx
+  40065c:	0f b6 12             	movzx  edx,BYTE PTR [rdx]
+  40065f:	83 f2 cc             	xor    edx,0xffffffcc
+  400662:	88 10                	mov    BYTE PTR [rax],dl
+  400664:	83 45 ec 01          	add    DWORD PTR [rbp-0x14],0x1
+  400668:	8b 55 ec             	mov    edx,DWORD PTR [rbp-0x14]
+  40066b:	8b 05 43 0a 20 00    	mov    eax,DWORD PTR [rip+0x200a43]        # 6010b4 <flag_bin_len>
+  400671:	39 c2                	cmp    edx,eax
+  400673:	72 cd                	jb     400642 <main+0x6c>
+/*
+for(i = 0; i < flag_bin_len; i++) {
+  a[i] = a[i] ^ 0xcc
+}
+*/
+  400675:	48 8b 45 f0          	mov    rax,QWORD PTR [rbp-0x10]
+  400679:	ba 04 00 00 00       	mov    edx,0x4
+  40067e:	be 00 10 00 00       	mov    esi,0x1000
+  400683:	48 89 c7             	mov    rdi,rax
+  400686:	e8 35 fe ff ff       	call   4004c0 <mprotect@plt>
+  
+// mprotect(0x9bc000, 4096, PROT_EXEC = 4) = 0
+
+  40068b:	48 8b 45 f0          	mov    rax,QWORD PTR [rbp-0x10]
+  40068f:	8b 15 1f 0a 20 00    	mov    edx,DWORD PTR [rip+0x200a1f]        # 6010b4 <flag_bin_len>
+  400695:	89 d2                	mov    edx,edx
+  400697:	48 01 d0             	add    rax,rdx
+  40069a:	48 89 45 f8          	mov    QWORD PTR [rbp-0x8],rax
+  40069e:	48 8b 55 f8          	mov    rdx,QWORD PTR [rbp-0x8]
+  4006a2:	b8 00 00 00 00       	mov    eax,0x0
+  4006a7:	ff d2                	call   rdx
+// call flag_bin[83] <- 应该是要改这里
+  4006a9:	b8 00 00 00 00       	mov    eax,0x0
+  4006ae:	c9                   	leave  
+  4006af:	c3                   	ret    
+```
+
+总结一下，这份代码
+- 使用 `memalign` + `mprotect` 申请了一块对齐的可读写内存，把 `.data` 段中从 `0x601060` 开始的 83 个字节拷贝到申请内存中。
+	- 由遗留下来的符号 `flag_bin_len` 可以猜测出，这 83 个字节应该就是 `flag_bin`，运行后可以生成我们想要的 flag。
+- 对遍历 `flag_bin[0~82]` 异或 `0xcc` 后，得到解码后的可执行代码段
+- 为了执行这一部分代码，需要使用 `mprotect` 将这段内存的权限改为 `PROT_EXEC`
+- 但是最后执行的是 `call flag_bin[83]`，而偏移 83 处是先前写入的 `ret` 指令。也就是说，程序会在 `call` 之后立马 `ret` 回来。这显然不是我们想要的。
+
+因此，我们需要让程序执行 `call flag_bin`。只需要把 `40069e` 处的 `mov rdx,QWORD PTR [rbp-0x8]` 改成 `mov rdx,QWORD PTR [rbp-0x10]` 即可。
+
+正愁要学命令格式呢，刚好，这句话就在 `400655` 出现过。
+
+```
+  400655:	48 8b 55 f0          	mov    rdx,QWORD PTR [rbp-0x10]
+```
+
+所以我们需要把 elf 文件 `0x6a1` 处的 `f8` 改为 `f0`。在 makefile 中写好命令后，运行
+
+```
+$ make elf_repaired 
+cp elf elf_repaired
+printf "\360" | dd of=elf_repaired bs=1 seek=$((0x6a1)) conv=notrunc
+1+0 records in
+1+0 records out
+1 byte copied, 0,000584963 s, 1,7 kB/s
+chmod 777 elf_repaired
+```
+
+使用 `printf "\360"` 而非 `printf "\xf0"` 是因为 `\xf0` 会被 makefile 解释为 UTF-8 的 4 字节字符，具体原因未知。
+
+```
+$ ./elf_repaired
+2235a6b2123404469f4abce71b1dd29f �A�
+```
+
+虽然最后有个莫名其妙的 `�A�`，但我们不管它。
+
+```
+$ ./oracle 2235a6b2123404469f4abce71b1dd29f
++~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+
+| Level 8 completed, unlocked reward.tar.gz |
++~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+
+Run oracle with -h to show a hint
+```
